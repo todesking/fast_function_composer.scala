@@ -1,6 +1,6 @@
 # Fast Function Composer
 
-If you want to compose many small functions into big one, and use it 1000 times/sec,
+If you want to compose MANY small functions into big one, and use it 10000 times/sec,
 Scala's function composition is not fast enough.
 
 ## Usage
