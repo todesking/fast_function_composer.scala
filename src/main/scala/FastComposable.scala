@@ -140,6 +140,9 @@ sealed abstract class FastComposable[A, B] extends (A => B) {
   override def andThen[C](g: B => C): FastComposable[A, C] =
     new FastComposable2(this, FastComposable.noHint(g))
 
+  override def compose[C](g: C => A): FastComposable[C, B] =
+    new FastComposable2(FastComposable.noHint(g), this)
+
   def andThenH[C](g: B => C)(implicit t1: TypeTag[B], t2: TypeTag[C]): FastComposable[A, C] =
     andThen(FastComposable.hint(g))
 }
