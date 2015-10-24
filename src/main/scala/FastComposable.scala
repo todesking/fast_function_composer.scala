@@ -2,6 +2,8 @@ package com.todesking.fast_function_composer
 
 import scala.reflect.runtime.universe.{ typeTag, TypeTag }
 
+// class FastComposed* is auto generated in build time. See build.sbt
+
 object FastComposable {
   def hint[A: TypeTag, B: TypeTag](f: A => B): FastComposable[A, B] = f match {
     case f1: FastComposable1NoHint[A, B] => f1.hint
