@@ -14,6 +14,8 @@ libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value
 
 libraryDependencies += "org.scalatest" % "scalatest_2.11" % "2.2.4" % "test"
 
+scalacOptions ++= Seq("-feature", "-deprecation")
+
 scalariformSettings
 
 enablePlugins(JmhPlugin)

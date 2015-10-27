@@ -17,5 +17,14 @@ class Spec extends FunSpec with Matchers {
       FastComposable.compile(f2 compose f1)(1) should be("2")
       FastComposable.compile(hint(f2) compose noHint(f1 andThen identity))(1) should be("2")
     }
+
+    it("should make a function from two function1 and a combinator") {
+      import FastComposable.{ hint, noHint }
+      val f = FastComposable.splitJoin[Int, String, Double, String](hint { x: Int => (x + 1).toString }, hint { x: Int => x + 10.0 }) { (x1, x2) => x1 + x2.toString }
+
+      f(99) should be("100109.0")
+
+      FastComposable.compile(f, true)(99) should be("100109.0")
+    }
   }
 }
