@@ -57,7 +57,7 @@ object Compiler {
   }
 
   def compile[A, B](f: A => B, aggressive: Boolean = false): A => B = f match {
-    case f1: FastComposed[A, B] => f1
+    case f1: Compiled[A, B] => f1
     case f1: FastComposable[A, B] => f1 match {
       case FastComposable2(f1, f2) => compileComposed(f1, f2, aggressive)
       case f1: FastComposable1[A, B] => f1.unwrap
@@ -84,7 +84,7 @@ object Compiler {
 
   private[this] def typeHintAggressive[A, B](f: A => B): (TypeTag[_], TypeTag[_]) = {
     f match {
-      case f1: FastComposed[A, B] =>
+      case f1: Compiled[A, B] =>
         val (a, _, b) = f1.sig
         (typeTagFromSig(a) -> typeTagFromSig(b))
       case f1: FastComposable1NoHint[A, B] =>
@@ -175,23 +175,15 @@ object ClassGen {
     p.appendClassPath(new ClassClassPath(this.getClass))
     p
   }
-
-  def composerClass(sig1: Char, sig2: Char, sig3: Char): Class[_] = {
-    def getClass(name: String): Option[Class[_]] = try {
-      Some(Class.forName(this.getClass.getPackage.getName + ".FastComposed" + name, true, this.getClass.getClassLoader))
-    } catch {
-      case _: ClassNotFoundException => None
-    }
-
-    val template = getClass(s"${sig1}${sig2}${sig3}").orElse(getClass(s"L${sig2}L")).orElse(getClass("LLL")).get
-
-    import javassist.{ ClassPool, ClassClassPath }
-    val pool = ClassPool.getDefault()
-    pool.appendClassPath(new ClassClassPath(this.getClass))
-    val ct = pool.get(template.getName)
-
-    ct.setName(s"${template.getName}_${nextClassId()}")
-    ct.toClass()
+  private[this] lazy val ctFunction1 = classPool.get("scala.Function1")
+  private[this] lazy val ctFunction2 = classPool.get("scala.Function2")
+  private[this] lazy val ctObject = classPool.get("java.lang.Object")
+  private[this] lazy val ctCompiled = classPool.get(getClass.getPackage.getName + ".Compiled")
+  private[this] lazy val ctPrimitiveClasses: Map[Char, CtClass] = {
+    import CtClass._
+    Seq(booleanType, charType, byteType, shortType, intType, longType, floatType, doubleType).map { c =>
+      c.asInstanceOf[javassist.CtPrimitiveType].getDescriptor -> c
+    }.toMap
   }
 
   private[this] var _nextClassId = 0
@@ -200,121 +192,149 @@ object ClassGen {
     _nextClassId
   }
 
-  def splitJoinClass(sig1: Char, sig21: Char, sig22: Char, sig3: Char): Class[_] = {
-    val sup = classPool.get(getClass.getPackage.getName + ".FastComposed")
-    val klass = classPool.makeClass(s"${getClass.getPackage.getName}.SplitJoinCompiled${sig1}${sig21}${sig22}${sig3}_${nextClassId()}", sup)
-
-    import javassist.{ CtNewMethod, CtConstructor, CtField, Modifier }
-    import javassist.bytecode.AccessFlag
-
-    val ctF1 = classPool.get("scala.Function1")
-    val ctF2 = classPool.get("scala.Function2")
-    val ctObject = classPool.get("java.lang.Object")
-
-    val _f1 = new CtField(ctF1, "_f1", klass)
-    val _f2 = new CtField(ctF1, "_f2", klass)
-    val _j = new CtField(ctF2, "_j", klass)
-    Seq(_f1, _f2, _j) foreach { field =>
-      field.getFieldInfo.setAccessFlags(AccessFlag.PRIVATE | AccessFlag.FINAL)
-      klass.addField(field)
-    }
-
-    val co = new CtConstructor(Array[CtClass](ctF1, ctF1, ctF2), klass)
-    co.setBody("""{
-      this._f1 = $1;
-      this._f2 = $2;
-      this._j = $3;
-    }""")
-    klass.addConstructor(co)
-
-    def specializedName(base: String, sigR: Char, sigs: Char*): String =
-      if (sigR == 'L' || sigs.exists(_ == 'L')) base
-      else s"${base}$$mc${sigR}${sigs.mkString("")}$$sp"
-
-    def box(sig: Char, expr: String): String = {
-      sig match {
-        case 'L' => expr
-        case _ => s"($$w)(${expr})"
-      }
-    }
-    def unbox(sig: Char, expr: String) =
-      sig match {
-        case 'L' => expr
-        case 'I' => s"((java.lang.Integer)(${expr})).intValue()"
-        case 'D' => s"((java.lang.Double)(${expr})).doubleValue()"
-      }
-
-    def specialCall(base: String, sigR: Char, args: (Char, String)*): String = {
-      val method = specializedName(base, sigR, args.map(_._1): _*)
-      if (method == base) {
-        s"${method}(${args.map { case (s, a) => box(s, a) }.mkString(", ")})"
-      } else {
-        s"${method}(${args.map(_._2).mkString(", ")})"
-      }
-    }
+  // sig1 -> sig2, sig2 -> sig3
+  def composerClass(sig1: Char, sig2: Char, sig3: Char): Class[_] = {
+    val klass = createBase("CompiledComposed", "_f1" -> ctFunction1, "_f2" -> ctFunction1)
 
     val baseName = "apply"
     val spName = specializedName(baseName, sig3, sig1)
     if (spName == baseName) {
-      val ap = CtNewMethod.make(
-        Modifier.PUBLIC | Modifier.FINAL,
-        ctObject,
-        baseName,
-        Array[CtClass](ctObject),
-        Array[CtClass](),
+      addMethod(klass, ctObject, baseName, ctObject)(s"""{
+        return ($$w)(${
+        specialCall(
+          "this._f2.apply",
+          sig3,
+          (sig2 -> specialCall("this._f1.apply", sig2, sig1 -> unbox(sig1, "$1")))
+        )
+      });
+      }""")
+    } else {
+      addMethod(klass, ctObject, baseName, ctObject)(
+        s"""{return ($$w)${spName}(${unbox(sig1, "$1")});}"""
+      )
+      addMethod(klass, ctClassFromSig(sig3), spName, ctClassFromSig(sig1))(
+        s"""{ return ${
+          specialCall(
+            "this._f2.apply",
+            sig3,
+            sig2 -> specialCall("this._f1.apply", sig2, sig1 -> "$1")
+          )
+        };}"""
+      )
+    }
+
+    klass.toClass()
+  }
+
+  def splitJoinClass(sig1: Char, sig21: Char, sig22: Char, sig3: Char): Class[_] = {
+    val klass = createBase(
+      "SplitJoinCompiled${sig1}${sig21}${sig22}${sig3}",
+      "_f1" -> ctFunction1,
+      "_f2" -> ctFunction1,
+      "_j" -> ctFunction2
+    )
+
+    import javassist.{ CtNewMethod, Modifier }
+
+    val baseName = "apply"
+    val spName = specializedName(baseName, sig3, sig1)
+    if (spName == baseName) {
+      addMethod(klass, ctObject, baseName, ctObject)(
         "{ return ($w)(" + specialCall(
           "this._j.apply",
           sig3,
           (sig21 -> specialCall("this._f1.apply", sig21, sig1 -> unbox(sig1, "$1"))),
           (sig22 -> specialCall("this._f2.apply", sig22, sig1 -> unbox(sig1, "$1")))
-        ) + ");}",
-        klass
+        ) + ");}"
       )
-      klass.addMethod(ap)
     } else {
-      val apsp = CtNewMethod.make(
-        Modifier.PUBLIC | Modifier.FINAL,
-        ctClassFromSig(sig3),
-        spName,
-        Array[CtClass](ctClassFromSig(sig1)),
-        Array[CtClass](),
+      addMethod(klass, ctClassFromSig(sig3), spName, ctClassFromSig(sig1))(
         "{ return " + specialCall(
           "this._j.apply",
           sig3,
           (sig21 -> specialCall("this._f1.apply", sig21, sig1 -> "$1")),
           (sig22 -> specialCall("this._f2.apply", sig22, sig1 -> "$1"))
-        ) + ";}",
-        klass
+        ) + ";}"
       )
-      klass.addMethod(apsp)
 
-      val ap = CtNewMethod.make(
-        Modifier.PUBLIC | Modifier.FINAL,
-        ctClassFromSig(sig3),
-        baseName,
-        Array[CtClass](ctClassFromSig(sig1)),
-        Array[CtClass](),
-        s"{return ${spName}(${box(sig1, "$1")});}",
-        klass
+      addMethod(klass, ctClassFromSig(sig3), baseName, ctClassFromSig(sig1))(
+        s"{return ${spName}(${unbox(sig1, "$1")});}"
       )
-      klass.addMethod(ap)
     }
 
     val k = klass.toClass()
     k
   }
 
-  private[this] def ctClassFromSig(sig: Char): CtClass = {
-    val classes = {
-      import CtClass._
-      Seq(booleanType, charType, byteType, shortType, intType, longType, floatType, doubleType).map { c =>
-        c.asInstanceOf[javassist.CtPrimitiveType].getDescriptor -> c
-      }.toMap
+  private[this] def addMethod(klass: CtClass, retType: CtClass, name: String, args: CtClass*)(body: String): Unit = {
+    import javassist.CtNewMethod
+    import javassist.Modifier
+    val method = CtNewMethod.make(
+      Modifier.PUBLIC | Modifier.FINAL,
+      retType,
+      name,
+      args.toArray,
+      Array[CtClass](),
+      body,
+      klass
+    )
+    klass.addMethod(method)
+  }
+
+  private[this] def createBase(baseName: String, fields: (String, CtClass)*): CtClass = {
+    import javassist.{ CtField, CtConstructor }
+    import javassist.bytecode.AccessFlag
+
+    val name = getClass.getPackage.getName + "." + baseName + nextClassId().toString
+
+    val klass = classPool.makeClass(name, ctCompiled)
+
+    fields.map {
+      case (fname, ftype) =>
+        new CtField(ftype, fname, klass)
+    }.foreach { field =>
+      field.getFieldInfo.setAccessFlags(AccessFlag.PRIVATE | AccessFlag.FINAL)
+      klass.addField(field)
     }
-    if (sig == 'L')
-      classPool.get("java.lang.Object")
-    else
-      classes(sig)
+
+    val co = new CtConstructor(fields.map(_._2).toArray, klass)
+    co.setBody("{ "
+      + fields.map(_._1).zipWithIndex.map { case (fname, i) => s"this.${fname} = $$${i + 1};" }.mkString("\n")
+      + "}")
+    klass.addConstructor(co)
+
+    klass
+  }
+
+  private[this] def ctClassFromSig(sig: Char): CtClass = {
+    if (sig == 'L') ctObject
+    else ctPrimitiveClasses(sig)
+  }
+
+  private[this] def box(sig: Char, expr: String): String = {
+    sig match {
+      case 'L' => expr
+      case _ => s"($$w)(${expr})"
+    }
+  }
+  private[this] def unbox(sig: Char, expr: String) =
+    sig match {
+      case 'L' => expr
+      case 'I' => s"((java.lang.Integer)(${expr})).intValue()"
+      case 'D' => s"((java.lang.Double)(${expr})).doubleValue()"
+    }
+
+  private[this] def specializedName(base: String, sigR: Char, sigs: Char*): String =
+    if (sigR == 'L' || sigs.exists(_ == 'L')) base
+    else s"${base}$$mc${sigR}${sigs.mkString("")}$$sp"
+
+  private[this] def specialCall(base: String, sigR: Char, args: (Char, String)*): String = {
+    val method = specializedName(base, sigR, args.map(_._1): _*)
+    if (method == base) {
+      s"${method}(${args.map { case (s, a) => box(s, a) }.mkString(", ")})"
+    } else {
+      s"${method}(${args.map(_._2).mkString(", ")})"
+    }
   }
 }
 
@@ -356,6 +376,6 @@ final case class Select[A, B](cond: A => Boolean, the: A => B, els: A => B) exte
   override def apply(a: A) = if (cond(a)) the(a) else els(a)
 }
 
-abstract class FastComposed[A, B] extends (A => B) {
+abstract class Compiled[A, B] extends (A => B) {
   def sig: (Char, Char, Char)
 }
