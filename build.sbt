@@ -23,11 +23,7 @@ enablePlugins(JmhPlugin)
 sourceGenerators in Compile <+= sourceManaged in Compile map { dir: File =>
   val file = dir / "fast_composed.scala"
   var src = """package com.todesking.fast_function_composer
-sealed abstract class FastComposed[A, B] extends (A => B) {
-  def sig: (Char, Char, Char)
-}
-
-  """
+"""
   val sigs = Seq(
     'L' -> "Any",
     'I' -> "Int",

@@ -29,13 +29,6 @@ object FastComposable {
 }
 
 object Compiler {
-  import javassist.{ ClassPool, ClassClassPath, CtClass, CtMethod }
-  val classPool = {
-    val p = new ClassPool(null)
-    p.appendClassPath(new ClassClassPath(this.getClass))
-    p
-  }
-
   def typeHintA[A, B](f: A => B, aggressive: Boolean): Option[TypeTag[_]] = f match {
     case f1: FastComposable1Hint[A, B] => Some(f1.typeHintA)
     case FastComposable2(f1, f2) => typeHintA(f1, aggressive)
@@ -149,29 +142,15 @@ object Compiler {
     val cf1 = compile(f1, aggressive)
     val cf2 = compile(f2, aggressive)
 
-    val klass = composerKlass(
-      typeHintA(f1, aggressive),
-      typeHintB(f1, aggressive),
-      typeHintA(f2, aggressive),
-      typeHintB(f2, aggressive)
-    )
+    val sig1 = sigFromTypeTag(typeHintA(f1, aggressive))
+    val sig2 = sigFromTypeTag(typeHintB(f1, aggressive), typeHintA(f2, aggressive))
+    val sig3 = sigFromTypeTag(typeHintB(f2, aggressive))
+
+    val klass = ClassGen.composerClass(sig1, sig2, sig3)
 
     klass.getConstructor(classOf[Function1[_, _]], classOf[Function1[_, _]])
       .newInstance(cf1, cf2)
       .asInstanceOf[A => C]
-  }
-
-  private[this] def ctClassFromSig(sig: Char): CtClass = {
-    val classes = {
-      import CtClass._
-      Seq(booleanType, charType, byteType, shortType, intType, longType, floatType, doubleType).map { c =>
-        c.asInstanceOf[javassist.CtPrimitiveType].getDescriptor -> c
-      }.toMap
-    }
-    if (sig == 'L')
-      classPool.get("java.lang.Object")
-    else
-      classes(sig)
   }
 
   private[this] def compileSplitJoin[A, B, C, D](f1: A => B, f2: A => C, j: (B, C) => D, aggressive: Boolean): A => D = {
@@ -180,6 +159,48 @@ object Compiler {
     val sig22 = sigFromTypeTag(typeHintB(f2, aggressive), typeHintA(j, aggressive)._2)
     val sig3 = sigFromTypeTag(typeHintB(j, aggressive))
 
+    val klass = ClassGen.splitJoinClass(sig1, sig21, sig22, sig3)
+
+    klass.getConstructor(classOf[Function1[_, _]], classOf[Function1[_, _]], classOf[Function2[_, _, _]])
+      .newInstance(compile(f1), compile(f2), j)
+      .asInstanceOf[A => D]
+  }
+
+}
+
+object ClassGen {
+  import javassist.{ ClassPool, ClassClassPath, CtClass, CtMethod }
+  private[this] val classPool = {
+    val p = new ClassPool(null)
+    p.appendClassPath(new ClassClassPath(this.getClass))
+    p
+  }
+
+  def composerClass(sig1: Char, sig2: Char, sig3: Char): Class[_] = {
+    def getClass(name: String): Option[Class[_]] = try {
+      Some(Class.forName(this.getClass.getPackage.getName + ".FastComposed" + name, true, this.getClass.getClassLoader))
+    } catch {
+      case _: ClassNotFoundException => None
+    }
+
+    val template = getClass(s"${sig1}${sig2}${sig3}").orElse(getClass(s"L${sig2}L")).orElse(getClass("LLL")).get
+
+    import javassist.{ ClassPool, ClassClassPath }
+    val pool = ClassPool.getDefault()
+    pool.appendClassPath(new ClassClassPath(this.getClass))
+    val ct = pool.get(template.getName)
+
+    ct.setName(s"${template.getName}_${nextClassId()}")
+    ct.toClass()
+  }
+
+  private[this] var _nextClassId = 0
+  private[this] def nextClassId(): Int = synchronized {
+    _nextClassId += 1
+    _nextClassId
+  }
+
+  def splitJoinClass(sig1: Char, sig21: Char, sig22: Char, sig3: Char): Class[_] = {
     val sup = classPool.get(getClass.getPackage.getName + ".FastComposed")
     val klass = classPool.makeClass(s"${getClass.getPackage.getName}.SplitJoinCompiled${sig1}${sig21}${sig22}${sig3}_${nextClassId()}", sup)
 
@@ -280,38 +301,20 @@ object Compiler {
     }
 
     val k = klass.toClass()
-
-    k.getConstructor(classOf[Function1[_, _]], classOf[Function1[_, _]], classOf[Function2[_, _, _]])
-      .newInstance(compile(f1), compile(f2), j)
-      .asInstanceOf[A => D]
+    k
   }
 
-  private[this] def composerKlass(t1: Option[TypeTag[_]], t2: Option[TypeTag[_]], t3: Option[TypeTag[_]], t4: Option[TypeTag[_]]): Class[_] = {
-    def getClass(name: String): Option[Class[_]] = try {
-      Some(Class.forName(this.getClass.getPackage.getName + ".FastComposed" + name, true, this.getClass.getClassLoader))
-    } catch {
-      case _: ClassNotFoundException => None
+  private[this] def ctClassFromSig(sig: Char): CtClass = {
+    val classes = {
+      import CtClass._
+      Seq(booleanType, charType, byteType, shortType, intType, longType, floatType, doubleType).map { c =>
+        c.asInstanceOf[javassist.CtPrimitiveType].getDescriptor -> c
+      }.toMap
     }
-
-    val sa = sigFromTypeTag(t1)
-    val sb = sigFromTypeTag(t2, t3)
-    val sc = sigFromTypeTag(t4)
-
-    val template = getClass(s"${sa}${sb}${sc}").orElse(getClass(s"L${sb}L")).orElse(getClass("LLL")).get
-
-    import javassist.{ ClassPool, ClassClassPath }
-    val pool = ClassPool.getDefault()
-    pool.appendClassPath(new ClassClassPath(this.getClass))
-    val ct = pool.get(template.getName)
-
-    ct.setName(s"${template.getName}_${nextClassId()}")
-    ct.toClass()
-  }
-
-  private[this] var _nextClassId = 0
-  private[this] def nextClassId(): Int = synchronized {
-    _nextClassId += 1
-    _nextClassId
+    if (sig == 'L')
+      classPool.get("java.lang.Object")
+    else
+      classes(sig)
   }
 }
 
@@ -351,4 +354,8 @@ final case class SplitJoin[A, B, C, D](f: A => B, g: A => C, j: (B, C) => D) ext
 
 final case class Select[A, B](cond: A => Boolean, the: A => B, els: A => B) extends FastComposable[A, B] {
   override def apply(a: A) = if (cond(a)) the(a) else els(a)
+}
+
+abstract class FastComposed[A, B] extends (A => B) {
+  def sig: (Char, Char, Char)
 }
