@@ -331,7 +331,7 @@ object ClassGen {
   private[this] def specialCall(base: String, sigR: Char, args: (Char, String)*): String = {
     val method = specializedName(base, sigR, args.map(_._1): _*)
     if (method == base) {
-      s"${method}(${args.map { case (s, a) => box(s, a) }.mkString(", ")})"
+      unbox(sigR, s"${method}(${args.map { case (s, a) => box(s, a) }.mkString(", ")})")
     } else {
       s"${method}(${args.map(_._2).mkString(", ")})"
     }
