@@ -26,6 +26,14 @@ object FastComposable {
 
   def compile[A, B](f: A => B, aggressive: Boolean = false): A => B =
     Compiler.compile(f, aggressive)
+
+  def inspect[A, B](f: A => B): String = f match {
+    case f1: FastComposable1Hint[A, B] => s"(${f1.typeHintA.tpe} => ${f1.typeHintB.tpe})"
+    case f1: FastComposable1NoHint[A, B] => s"[${inspect(f1)}]"
+    case FastComposable2(f1, f2) => s"${inspect(f1)} >>> ${inspect(f2)}"
+    case f1: Compiled[A, B] => f1.inspect()
+    case f1 => "(native)"
+  }
 }
 
 object Compiler {
@@ -85,7 +93,7 @@ object Compiler {
   private[this] def typeHintAggressive[A, B](f: A => B): (TypeTag[_], TypeTag[_]) = {
     f match {
       case f1: Compiled[A, B] =>
-        val (a, _, b) = f1.sig
+        val (a, b) = f1.sig
         (typeTagFromSig(a) -> typeTagFromSig(b))
       case f1: FastComposable1NoHint[A, B] =>
         typeHintAggressive(f1.unwrap)
@@ -177,7 +185,9 @@ object ClassGen {
   }
   private[this] lazy val ctFunction1 = classPool.get("scala.Function1")
   private[this] lazy val ctFunction2 = classPool.get("scala.Function2")
+  private[this] lazy val ctTuple2 = classPool.get("scala.Tuple2")
   private[this] lazy val ctObject = classPool.get("java.lang.Object")
+  private[this] lazy val ctString = classPool.get("java.lang.String")
   private[this] lazy val ctCompiled = classPool.get(getClass.getPackage.getName + ".Compiled")
   private[this] lazy val ctPrimitiveClasses: Map[Char, CtClass] = {
     import CtClass._
@@ -194,23 +204,32 @@ object ClassGen {
 
   // sig1 -> sig2, sig2 -> sig3
   def composerClass(sig1: Char, sig2: Char, sig3: Char): Class[_] = {
-    val klass = createBase("CompiledComposed", "_f1" -> ctFunction1, "_f2" -> ctFunction1)
+    val klass = createBase("CompiledComposed", sig1, sig3, "_f1" -> ctFunction1, "_f2" -> ctFunction1)
 
     val baseName = "apply"
     val spName = specializedName(baseName, sig3, sig1)
+
+    val sig =
+      if (spName == baseName) s"L${sig2}L"
+      else s"${sig1}${sig2}${sig3}"
+
+    val fc = FastComposable.getClass.getName + ".MODULE$"
+    addMethod(klass, ctString, "inspect")(
+      s"""{ return "${sig}[" + ${fc}.inspect(this._f1) + " >>> " + ${fc}.inspect(this._f2) + "]"; }"""
+    )
+
     if (spName == baseName) {
       addMethod(klass, ctObject, baseName, ctObject)(s"""{
-        return ($$w)(${
-        specialCall(
+        return ${
+        box(sig3, specialCall(
           "this._f2.apply",
           sig3,
           (sig2 -> specialCall("this._f1.apply", sig2, sig1 -> unbox(sig1, "$1")))
-        )
-      });
-      }""")
+        ))
+      };}""")
     } else {
       addMethod(klass, ctObject, baseName, ctObject)(
-        s"""{return ($$w)${spName}(${unbox(sig1, "$1")});}"""
+        s"""{return ${box(sig3, s"""${spName}(${unbox(sig1, "$1")})""")};}"""
       )
       addMethod(klass, ctClassFromSig(sig3), spName, ctClassFromSig(sig1))(
         s"""{ return ${
@@ -229,6 +248,8 @@ object ClassGen {
   def splitJoinClass(sig1: Char, sig21: Char, sig22: Char, sig3: Char): Class[_] = {
     val klass = createBase(
       "SplitJoinCompiled${sig1}${sig21}${sig22}${sig3}",
+      sig1,
+      sig3,
       "_f1" -> ctFunction1,
       "_f2" -> ctFunction1,
       "_j" -> ctFunction2
@@ -281,7 +302,7 @@ object ClassGen {
     klass.addMethod(method)
   }
 
-  private[this] def createBase(baseName: String, fields: (String, CtClass)*): CtClass = {
+  private[this] def createBase(baseName: String, sigA: Char, sigB: Char, fields: (String, CtClass)*): CtClass = {
     import javassist.{ CtField, CtConstructor }
     import javassist.bytecode.AccessFlag
 
@@ -302,6 +323,8 @@ object ClassGen {
       + fields.map(_._1).zipWithIndex.map { case (fname, i) => s"this.${fname} = $$${i + 1};" }.mkString("\n")
       + "}")
     klass.addConstructor(co)
+
+    addMethod(klass, ctTuple2, "sig")(s"""{ return new scala.Tuple2(($$w)'${sigA}', ($$w)'${sigB}'); }""")
 
     klass
   }
@@ -377,5 +400,6 @@ final case class Select[A, B](cond: A => Boolean, the: A => B, els: A => B) exte
 }
 
 abstract class Compiled[A, B] extends (A => B) {
-  def sig: (Char, Char, Char)
+  def sig: (Char, Char)
+  def inspect(): String
 }

@@ -27,8 +27,13 @@ class Spec extends FunSpec with Matchers {
 
       val fc = fII andThen fID andThen fAnyString andThen fStringI
 
+      FastComposable.inspect(fc) should be("(Int => Int) >>> (Int => Double) >>> (Any => java.lang.String) >>> (String => Int)")
+
       fc(1) should be(2)
-      FastComposable.compile(fc, false)(1) should be(2)
+      val cfc = FastComposable.compile(fc, false)
+      cfc(1) should be(2)
+
+      FastComposable.inspect(cfc) should be("ILI[LDL[IID[(native) >>> (native)] >>> (native)] >>> (native)]")
 
       val fs = FastComposable.splitJoin(fII, fID) { (a: Any, b: Any) => a.toString + b.toString }
       fs(1) should be("21.0")
