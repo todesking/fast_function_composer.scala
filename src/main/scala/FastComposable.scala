@@ -240,12 +240,12 @@ object ClassGen {
     val spName = specializedName(baseName, sig3, sig1)
     if (spName == baseName) {
       addMethod(klass, ctObject, baseName, ctObject)(
-        "{ return ($w)(" + specialCall(
+        "{ return " + box(sig3, specialCall(
           "this._j.apply",
           sig3,
           (sig21 -> specialCall("this._f1.apply", sig21, sig1 -> unbox(sig1, "$1"))),
           (sig22 -> specialCall("this._f2.apply", sig22, sig1 -> unbox(sig1, "$1")))
-        ) + ");}"
+        )) + ";}"
       )
     } else {
       addMethod(klass, ctClassFromSig(sig3), spName, ctClassFromSig(sig1))(
