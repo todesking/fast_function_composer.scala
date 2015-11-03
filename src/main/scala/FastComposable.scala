@@ -202,15 +202,20 @@ object ClassGen {
     _nextClassId
   }
 
+  private[this] var composerClassCache = Map.empty[(Char, Char, Char), Class[_]]
+
   // sig1 -> sig2, sig2 -> sig3
   def composerClass(sig1: Char, sig2: Char, sig3: Char): Class[_] = {
-    val klass = createBase("CompiledComposed", sig1, sig3, "_f1" -> ctFunction1, "_f2" -> ctFunction1)
+    if (composerClassCache.contains((sig1, sig2, sig3)))
+      return composerClassCache((sig1, sig2, sig3))
+
+    val klass = createBase(s"CompiledComposed${sig1}${sig2}${sig3}", sig1, sig3, "_f1" -> ctFunction1, "_f2" -> ctFunction1)
 
     val baseName = "apply"
     val spName = specializedName(baseName, sig3, sig1)
 
     val sig =
-      if (spName == baseName) s"L${sig2}L"
+      if (spName == baseName) s"LLL"
       else s"${sig1}${sig2}${sig3}"
 
     val fc = FastComposable.getClass.getName + ".MODULE$"
@@ -242,7 +247,9 @@ object ClassGen {
       )
     }
 
-    klass.toClass()
+    val c = klass.toClass()
+    composerClassCache += ((sig1, sig2, sig3) -> c)
+    c
   }
 
   def splitJoinClass(sig1: Char, sig21: Char, sig22: Char, sig3: Char): Class[_] = {
