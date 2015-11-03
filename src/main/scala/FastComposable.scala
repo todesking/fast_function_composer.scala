@@ -67,7 +67,7 @@ object Compiler {
   def compile[A, B](f: A => B, aggressive: Boolean = false): A => B = f match {
     case f1: Compiled[A, B] => f1
     case f1: FastComposable[A, B] => f1 match {
-      case FastComposable2(f1, f2) => compileComposed(f1, f2, aggressive)
+      case f1: FastComposable2[_, _, _] => compileComposed(f1, aggressive)
       case f1: FastComposable1[A, B] => f1.unwrap
       case SplitJoin(f1, f2, j) => compileSplitJoin(f1, f2, j, aggressive)
       case Select(c, t, e) => ???
@@ -146,18 +146,19 @@ object Compiler {
     else throw new AssertionError(s"BUG: ${t1} is incompatible to ${t2}")
   }
 
-  private[this] def compileComposed[A, B, C](f1: A => B, f2: B => C, aggressive: Boolean): A => C = {
-    val cf1 = compile(f1, aggressive)
-    val cf2 = compile(f2, aggressive)
+  private[this] def compileComposed[A, B, C](c: FastComposable2[A, B, C], aggressive: Boolean): A => C = {
+    val functions = c.toSeq
+    val naked = functions.map {
+      case f1: FastComposable1[_, _] => f1.unwrap
+      case f1 => f1
+    }
 
-    val sig1 = sigFromTypeTag(typeHintA(f1, aggressive))
-    val sig2 = sigFromTypeTag(typeHintB(f1, aggressive), typeHintA(f2, aggressive))
-    val sig3 = sigFromTypeTag(typeHintB(f2, aggressive))
+    val klass = ClassGen.composerClass(functions.map { f =>
+      sigFromTypeTag(typeHintA(f, aggressive)) -> sigFromTypeTag(typeHintB(f, aggressive))
+    })
 
-    val klass = ClassGen.composerClass(sig1, sig2, sig3)
-
-    klass.getConstructor(classOf[Function1[_, _]], classOf[Function1[_, _]])
-      .newInstance(cf1, cf2)
+    klass.getConstructor(functions.map { _ => classOf[Function1[_, _]] }: _*)
+      .newInstance(naked: _*)
       .asInstanceOf[A => C]
   }
 
@@ -202,53 +203,56 @@ object ClassGen {
     _nextClassId
   }
 
-  private[this] var composerClassCache = Map.empty[(Char, Char, Char), Class[_]]
+  private[this] var composerClassCache = Map.empty[String, Class[_]]
 
-  // sig1 -> sig2, sig2 -> sig3
-  def composerClass(sig1: Char, sig2: Char, sig3: Char): Class[_] = {
-    if (composerClassCache.contains((sig1, sig2, sig3)))
-      return composerClassCache((sig1, sig2, sig3))
+  def composerClass(sigs: Seq[(Char, Char)]): Class[_] = {
+    require(sigs.nonEmpty)
 
-    val klass = createBase(s"CompiledComposed${sig1}${sig2}${sig3}", sig1, sig3, "_f1" -> ctFunction1, "_f2" -> ctFunction1)
+    val fullSig = sigs.map { case (l, r) => s"${l}${r}" }.mkString("")
+
+    if (composerClassCache.contains(fullSig))
+      return composerClassCache(fullSig)
+
+    val sigFirst = sigs.head._1
+    val sigLast = sigs.last._2
+
+    val klass = createBase(
+      s"CompiledComposed${fullSig}",
+      sigLast,
+      sigFirst,
+      sigs.zipWithIndex.map { case (_, i) => s"_f${i + 1}" -> ctFunction1 }: _*
+    )
 
     val baseName = "apply"
-    val spName = specializedName(baseName, sig3, sig1)
-
-    val sig =
-      if (spName == baseName) s"LLL"
-      else s"${sig1}${sig2}${sig3}"
+    val spName = specializedName(baseName, sigLast, sigFirst)
 
     val fc = FastComposable.getClass.getName + ".MODULE$"
     addMethod(klass, ctString, "inspect")(
-      s"""{ return "${sig}[" + ${fc}.inspect(this._f1) + " >>> " + ${fc}.inspect(this._f2) + "]"; }"""
+      s"""{ return "[${sigs.map { case (l, r) => s"(${l} => ${r})" }.mkString(" >>> ")}]"; }"""
     )
 
-    if (spName == baseName) {
-      addMethod(klass, ctObject, baseName, ctObject)(s"""{
-        return ${
-        box(sig3, specialCall(
-          "this._f2.apply",
-          sig3,
-          (sig2 -> specialCall("this._f1.apply", sig2, sig1 -> unbox(sig1, "$1")))
-        ))
-      };}""")
-    } else {
-      addMethod(klass, ctObject, baseName, ctObject)(
-        s"""{return ${box(sig3, s"""${spName}(${unbox(sig1, "$1")})""")};}"""
-      )
-      addMethod(klass, ctClassFromSig(sig3), spName, ctClassFromSig(sig1))(
-        s"""{ return ${
-          specialCall(
-            "this._f2.apply",
-            sig3,
-            sig2 -> specialCall("this._f1.apply", sig2, sig1 -> "$1")
+    def callComposed(sigR: Char, arg: String, sigArg: Char) = {
+      val (expr, sigExpr) = sigs.zipWithIndex.foldLeft(arg -> sigArg) {
+        case ((a, sigIn1), ((sigIn2, sigOut), i)) =>
+          val expr = specialCall(
+            s"this._f${i + 1}.apply",
+            sigOut,
+            sigIn2 -> autoBox(sigIn1, sigIn2, a)
           )
-        };}"""
+          expr -> sigOut
+      }
+      autoBox(sigExpr, sigR, expr)
+    }
+
+    addMethod(klass, ctObject, baseName, ctObject)(s"""{return ${callComposed('L', "$1", 'L')};}""")
+    if (spName != baseName) {
+      addMethod(klass, ctClassFromSig(sigLast), spName, ctClassFromSig(sigFirst))(
+        s"""{ return ${callComposed(sigLast, "$1", sigFirst)};}"""
       )
     }
 
     val c = klass.toClass()
-    composerClassCache += ((sig1, sig2, sig3) -> c)
+    composerClassCache += (fullSig -> c)
     c
   }
 
@@ -341,6 +345,12 @@ object ClassGen {
     else ctPrimitiveClasses(sig)
   }
 
+  private[this] def autoBox(sigFrom: Char, sigTo: Char, expr: String): String =
+    if (sigFrom == sigTo) expr
+    else if (sigFrom == 'L') unbox(sigTo, expr)
+    else if (sigTo == 'L') box(sigFrom, expr)
+    else throw new IllegalArgumentException(s"Incompatible: ${sigFrom} to ${sigTo}")
+
   private[this] def box(sig: Char, expr: String): String = {
     sig match {
       case 'L' => expr
@@ -396,6 +406,13 @@ final class FastComposable1NoHint[A, B](f: A => B) extends FastComposable1[A, B]
 
 final case class FastComposable2[A, B, C](f1: A => B, f2: B => C) extends FastComposable[A, C] {
   override def apply(a: A): C = f2(f1(a))
+
+  def toSeq: Seq[Function1[_, _]] = toSeq(f1) ++ toSeq(f2)
+
+  private[this] def toSeq(f: Function1[_, _]): Seq[Function1[_, _]] = f match {
+    case f1: FastComposable2[_, _, _] => f1.toSeq
+    case f1 => Seq(f1)
+  }
 }
 
 final case class SplitJoin[A, B, C, D](f: A => B, g: A => C, j: (B, C) => D) extends FastComposable[A, D] {

@@ -33,7 +33,7 @@ class Spec extends FunSpec with Matchers {
       val cfc = FastComposable.compile(fc, false)
       cfc(1) should be(2)
 
-      FastComposable.inspect(cfc) should be("ILI[LLL[IID[(native) >>> (native)] >>> (native)] >>> (native)]")
+      FastComposable.inspect(cfc) should be("[(I => I) >>> (I => D) >>> (L => L) >>> (L => I)]")
 
       val fs = FastComposable.splitJoin(fII, fID) { (a: Any, b: Any) => a.toString + b.toString }
       fs(1) should be("21.0")
