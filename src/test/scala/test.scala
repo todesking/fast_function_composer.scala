@@ -50,7 +50,11 @@ class Spec extends FunSpec with Matchers {
 
       f(99) should be("100109.0")
 
-      FastComposable.compile(f, true)(99) should be("100109.0")
+      val fc = FastComposable.compile(f, true)
+
+      fc(99) should be("100109.0")
+
+      FastComposable.inspect(fc) should be("[I ={L|D}=> L]")
     }
   }
 }

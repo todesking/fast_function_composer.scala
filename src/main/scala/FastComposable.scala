@@ -258,15 +258,13 @@ object ClassGen {
 
   def splitJoinClass(sig1: Char, sig21: Char, sig22: Char, sig3: Char): Class[_] = {
     val klass = createBase(
-      "SplitJoinCompiled${sig1}${sig21}${sig22}${sig3}",
+      s"SplitJoinCompiled${sig1}${sig21}${sig22}${sig3}",
       sig1,
       sig3,
       "_f1" -> ctFunction1,
       "_f2" -> ctFunction1,
       "_j" -> ctFunction2
     )
-
-    import javassist.{ CtNewMethod, Modifier }
 
     val baseName = "apply"
     val spName = specializedName(baseName, sig3, sig1)
@@ -293,9 +291,11 @@ object ClassGen {
         s"{return ${spName}(${unbox(sig1, "$1")});}"
       )
     }
+    addMethod(klass, ctString, "inspect")(s"""{
+      return "[${sig1} ={${sig21}|${sig22}}=> ${sig3}]";
+    }""")
 
-    val k = klass.toClass()
-    k
+    klass.toClass()
   }
 
   private[this] def addMethod(klass: CtClass, retType: CtClass, name: String, args: CtClass*)(body: String): Unit = {
