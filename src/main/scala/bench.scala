@@ -44,6 +44,13 @@ object Bench {
     compile(F andThen F andThen F andThen F, aggressive = true)
   }
 
+  val fastMHF = {
+    // Experimental: Same performance as fast, but no type hints required
+    import FastComposable.{ hint, compileMH }
+    def F = hint(f1) andThen hint(f2) andThen hint(f3) andThen hint(f4) andThen hint(f5) andThen hint(f6) andThen hint(f7) andThen hint(f8)
+    compileMH(F andThen F andThen F andThen F)
+  }
+
   type Env = Map[Symbol, Any]
 
   sealed trait E[@specialized(Int, Double) A] {
@@ -121,6 +128,13 @@ class Bench {
   def aggressive(): Any = {
     var x = 0
     (0 until 1000).foreach { i => x += Bench.aggressiveF(i) }
+    x
+  }
+
+  @Benchmark
+  def fastMH(): Any = {
+    var x = 0
+    (0 until 1000).foreach { i => x += Bench.fastMHF(i) }
     x
   }
 

@@ -4,6 +4,11 @@ import scala.reflect.runtime.universe.{ typeTag, TypeTag }
 
 import scala.language.existentials
 
+case class MHFunctionII(mh: java.lang.invoke.MethodHandle) extends Function1[Int, Int] {
+  override def apply(a: Int): Int =
+    mh.invokeExact(a)
+}
+
 object Compiler {
   def typeHintA[A, B](f: A => B, aggressive: Boolean): Option[TypeTag[_]] = f match {
     case f1: FastComposable1Hint[A, B] => Some(f1.typeHintA)
@@ -42,6 +47,63 @@ object Compiler {
     }
     case f1 => f1
   }
+
+  def compileMH[A, B](f: A => B): A => B = f match {
+    case f1: Compiled[A, B] => f1
+    case f1: FastComposable[A, B] => f1 match {
+      case f1: FastComposable2[_, _, _] =>
+        compileMH(f1.toSeq)
+      case f1: FastComposable1[A, B] => f1.unwrap
+      case SplitJoin(f1, f2, j) => compileSplitJoin(f1, f2, j, true)
+      case Select(c, t, e) => ???
+    }
+    case f1 => f1
+  }
+
+  def compileMH[@specialized(Double, Int) A, @specialized(Double, Int) B](fs: Seq[Function1[_, _]]): A => B = {
+    import java.lang.invoke.{ MethodHandles, MethodType }
+    val lookup = MethodHandles.lookup()
+    if (fs.isEmpty) {
+      (identity _).asInstanceOf[A => B]
+    } else {
+      val methodHandle =
+        fs.foldLeft(MethodHandles.identity(tagToClass(typeTagFromSig(sigFromTypeTag(typeHintA(fs.head, true)))))) { (mh, r) =>
+          val rA = sigFromTypeTag(typeHintA(r, true))
+          val rB = sigFromTypeTag(typeHintB(r, true))
+          val lB = sigFromTypeTag(classToTag(mh.`type`.returnType))
+          val lr = commonTypeSig(lB, rA)
+          val applyR = specializedName("apply", rB, lr)
+          val nakedR = unwrap(r)
+          val mtR = MethodType.methodType(tagToClass(typeTagFromSig(rB)), tagToClass(typeTagFromSig(lr)))
+          val mhR = lookup.findVirtual(nakedR.getClass, applyR, mtR).bindTo(nakedR)
+          MethodHandles.filterReturnValue(mh, mhR)
+        }
+      MHFunctionII(methodHandle).asInstanceOf[A => B]
+    }
+  }
+
+  private[this] def classToTag(c: Class[_]): TypeTag[_] =
+    if (c == java.lang.Integer.TYPE) TypeTag.Int
+    else if (c == java.lang.Double.TYPE) TypeTag.Double
+    else TypeTag.Any
+
+  private[this] def tagToClass(t: TypeTag[_]): Class[_] = t.mirror.runtimeClass(t.tpe.typeSymbol.asClass)
+
+  private[this] def unwrap[A, B](f: A => B): A => B = f match {
+    case f1: FastComposable1[A, B] => f1.unwrap
+    case f1 => f1
+  }
+
+  private[this] def commonTypeSig(t1: Char, t2: Char): Char = (t1, t2) match {
+    case ('L', _) => 'L'
+    case (_, 'L') => 'L'
+    case (a, b) if a == b => a
+    case (a, b) => throw new IllegalArgumentException(s"Incompatible type: ${a} and ${b}")
+  }
+
+  private[this] def specializedName(base: String, sigR: Char, sigs: Char*): String =
+    if (sigR == 'L' || sigs.exists(_ == 'L')) base
+    else s"${base}$$mc${sigR}${sigs.mkString("")}$$sp"
 
   private[this] val typeTagSigs = Seq[(TypeTag[_], Char)](
     (TypeTag.Boolean -> 'Z'),

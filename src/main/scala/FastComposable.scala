@@ -27,6 +27,9 @@ object FastComposable {
   def compile[A, B](f: A => B, aggressive: Boolean = false): A => B =
     Compiler.compile(f, aggressive)
 
+  def compileMH[@specialized(Double, Int) A, @specialized(Double, Int) B](f: A => B): A => B =
+    Compiler.compileMH[A, B](f)
+
   def inspect[A, B](f: A => B): String = f match {
     case f1: FastComposable1Hint[A, B] => s"(${f1.typeHintA.tpe} => ${f1.typeHintB.tpe})"
     case f1: FastComposable1NoHint[A, B] => s"[${inspect(f1)}]"
