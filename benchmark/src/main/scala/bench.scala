@@ -11,7 +11,6 @@ object Main {
 }
 
 object Bench {
-  javassist.CtClass.debugDump = "./tmp"
   val f1: Int => Int = { x => x + 1 }
   val f2: Int => Double = { x => x + 10.0 }
   val f3: Double => Int = { x => (x * 100).toInt }
