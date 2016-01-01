@@ -37,3 +37,9 @@ val f2 = { x: Int => x.toDouble }
 val compiledA = compile(f1 andThen f2, aggressive = true)
 
 ```
+
+## Run Benchmark
+
+```
+sbt 'benchmark/jmh:run'
+```
