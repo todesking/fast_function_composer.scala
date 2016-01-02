@@ -1,209 +1,106 @@
 package com.todesking.fast_function_composer
 
 import scala.reflect.runtime.universe.{ typeTag, TypeTag }
+import java.lang.invoke.{ MethodHandles, MethodHandle, MethodType }
 
 import scala.language.existentials
 
-case class MHFunctionII(mh: java.lang.invoke.MethodHandle) extends Function1[Int, Int] {
-  override def apply(a: Int): Int =
-    mh.invokeExact(a)
-}
-
 object Compiler {
-  def typeHintA[A, B](f: A => B, aggressive: Boolean): Option[TypeTag[_]] = f match {
-    case f1: FastComposable1Hint[A, B] => Some(f1.typeHintA)
-    case FastComposable2(f1, f2) => typeHintA(f1, aggressive)
-    case f1 if aggressive => Some(typeHintAggressive(f1)._1)
-    case _ => None
-  }
+  import FastComposable.{Native, NativeHint,NativeNoHint, Compose}
 
-  def typeHintA[A, B, C](f: (A, B) => C, aggressive: Boolean): (Option[TypeTag[_]], Option[TypeTag[_]]) = f match {
-    case f1 if aggressive =>
-      val (t1, t2) = typeHintAggressive(f1)._1
-      (Some(t1) -> Some(t2))
-    case _ => (None, None)
-  }
+  def typeHintA[A, B](f: A => B, aggressive: Boolean): Sig =
+    typeHint(f, aggressive)._1
 
-  def typeHintB[A, B](f: A => B, aggressive: Boolean): Option[TypeTag[_]] = f match {
-    case f1: FastComposable1Hint[A, B] => Some(f1.typeHintB)
-    case FastComposable2(f1, f2) => typeHintB(f2, aggressive)
-    case f1 if aggressive => Some(typeHintAggressive(f1)._2)
-    case _ => None
-  }
+  def typeHintB[A, B](f: A => B, aggressive: Boolean): Sig =
+    typeHint(f, aggressive)._2
 
-  def typeHintB[A, B, C](f: (A, B) => C, aggressive: Boolean): Option[TypeTag[_]] = f match {
-    // case f1 @ Functionn2Hinted(_) => f1.hintB
-    case f1 if aggressive => Some(typeHintAggressive(f1)._2)
-    case _ => None
+  def typeHint[A, B](f: A => B, aggressive: Boolean): (Sig, Sig) = f match {
+    case NativeHint(_, sigA, sigB) => (sigA -> sigB)
+    case NativeNoHint(f1) => typeHint(f1, aggressive)
+    case Compose(f1, f2) => (typeHintA(f1, aggressive) -> typeHintB(f2, aggressive))
+    case f1 if aggressive => typeHintAggressive(f1)
+    case _ => (Sig.AnyRef -> Sig.AnyRef)
   }
 
   def compile[A, B](f: A => B, aggressive: Boolean = false): A => B = f match {
-    case f1: Compiled[A, B] => f1
-    case f1: FastComposable[A, B] => f1 match {
-      case f1: FastComposable2[_, _, _] => compileComposed(f1, aggressive)
-      case f1: FastComposable1[A, B] => f1.unwrap
-      case SplitJoin(f1, f2, j) => compileSplitJoin(f1, f2, j, aggressive)
-      case Select(c, t, e) => ???
-    }
+    case f @ Compose(f1, f2) => compileComposed(f, aggressive)
+    case f1: Native[A, B] => f1.unwrap
     case f1 => f1
   }
 
   def compileMH[A, B](f: A => B): A => B = f match {
-    case f1: Compiled[A, B] => f1
-    case f1: FastComposable[A, B] => f1 match {
-      case f1: FastComposable2[_, _, _] =>
-        compileMH(f1.toSeq)
-      case f1: FastComposable1[A, B] => f1.unwrap
-      case SplitJoin(f1, f2, j) => compileSplitJoin(f1, f2, j, true)
-      case Select(c, t, e) => ???
-    }
+    case f1: Native[A, B] => f1.unwrap
+    case c @ Compose(_, _) => compileMH(c.toSeq)
     case f1 => f1
   }
 
-  def compileMH[@specialized(Double, Int) A, @specialized(Double, Int) B](fs: Seq[Function1[_, _]]): A => B = {
-    import java.lang.invoke.{ MethodHandles, MethodType }
+  def compileMH[A, B](fs: Seq[Native[_, _]], aggressive: Boolean = true): A => B = {
     val lookup = MethodHandles.lookup()
     if (fs.isEmpty) {
       (identity _).asInstanceOf[A => B]
     } else {
+      val sigFirst = typeHintA(fs.head, aggressive)
       val methodHandle =
-        fs.foldLeft(MethodHandles.identity(tagToClass(typeTagFromSig(sigFromTypeTag(typeHintA(fs.head, true)))))) { (mh, r) =>
-          val rA = sigFromTypeTag(typeHintA(r, true))
-          val rB = sigFromTypeTag(typeHintB(r, true))
-          val lB = sigFromTypeTag(classToTag(mh.`type`.returnType))
-          val lr = commonTypeSig(lB, rA)
-          val applyR = specializedName("apply", rB, lr)
-          val nakedR = unwrap(r)
-          val mtR = MethodType.methodType(tagToClass(typeTagFromSig(rB)), tagToClass(typeTagFromSig(lr)))
-          val mhR = lookup.findVirtual(nakedR.getClass, applyR, mtR).bindTo(nakedR)
-          MethodHandles.filterReturnValue(mh, mhR)
+        fs.foldLeft(MethodHandles.identity(sigFirst.klass)) { (mhL, r) =>
+          val rA = typeHintA(r, aggressive)
+          val rB = typeHintB(r, aggressive)
+          val lB = Sig.of(mhL.`type`.returnType)
+          val lr = Sig.common(lB, rA)
+          val (apB, apA, apName) = specializedApply(rB, lr)
+          val nakedR = r.unwrap
+          val apType = MethodType.methodType(apB.klass, apA.klass)
+          val mhR = lookup.findVirtual(nakedR.getClass, apName, apType).bindTo(nakedR)
+          MethodHandles.filterReturnValue(autoBox(mhL, apA), mhR)
         }
-      MHFunctionII(methodHandle).asInstanceOf[A => B]
+      val sigLast = Sig.of(methodHandle.`type`.returnType)
+
+      MethodHandleFunction1(methodHandle, sigFirst, sigLast).asInstanceOf[A => B]
     }
   }
 
-  private[this] def classToTag(c: Class[_]): TypeTag[_] =
-    if (c == java.lang.Integer.TYPE) TypeTag.Int
-    else if (c == java.lang.Double.TYPE) TypeTag.Double
-    else TypeTag.Any
-
-  private[this] def tagToClass(t: TypeTag[_]): Class[_] = t.mirror.runtimeClass(t.tpe.typeSymbol.asClass)
-
-  private[this] def unwrap[A, B](f: A => B): A => B = f match {
-    case f1: FastComposable1[A, B] => f1.unwrap
-    case f1 => f1
-  }
-
-  private[this] def commonTypeSig(t1: Char, t2: Char): Char = (t1, t2) match {
-    case ('L', _) => 'L'
-    case (_, 'L') => 'L'
-    case (a, b) if a == b => a
-    case (a, b) => throw new IllegalArgumentException(s"Incompatible type: ${a} and ${b}")
-  }
-
-  private[this] def specializedName(base: String, sigR: Char, sigs: Char*): String =
-    if (sigR == 'L' || sigs.exists(_ == 'L')) base
-    else s"${base}$$mc${sigR}${sigs.mkString("")}$$sp"
-
-  private[this] val typeTagSigs = Seq[(TypeTag[_], Char)](
-    (TypeTag.Boolean -> 'Z'),
-    (TypeTag.Char -> 'C'),
-    (TypeTag.Byte -> 'B'),
-    (TypeTag.Short -> 'S'),
-    (TypeTag.Int -> 'I'),
-    (TypeTag.Float -> 'F'),
-    (TypeTag.Long -> 'J'),
-    (TypeTag.Double -> 'D')
-  )
-
-  private[this] val typeTag2Sig = typeTagSigs.toMap
-
-  private[this] val sig2TypeTag = typeTagSigs.map(_.swap).toMap
-
-  private[this] def typeHintAggressive[A, B](f: A => B): (TypeTag[_], TypeTag[_]) = {
-    f match {
-      case f1: Compiled[A, B] =>
-        val (a, b) = f1.sig
-        (typeTagFromSig(a) -> typeTagFromSig(b))
-      case f1: FastComposable1NoHint[A, B] =>
-        typeHintAggressive(f1.unwrap)
-      case f1 =>
-        val fallback = (TypeTag.Any -> TypeTag.Any)
-        val re = """^apply\$mc(.)(.)\$sp$""".r
-        val declaredMethods = f1.getClass.getDeclaredMethods.map(_.getName).filter(_.matches(re.regex))
-        if (declaredMethods.size == 1) {
-          declaredMethods.head match {
-            case `re`(a, b) => (typeTagFromSig(b(0)) -> typeTagFromSig(a(0)))
-          }
-        } else {
-          fallback
-        }
+  private[this] def autoBox(mh: MethodHandle, sig: Sig): MethodHandle = {
+    val mhSig = Sig.of(mh.`type`.returnType)
+    if(mhSig == sig) mh
+    else if(mhSig == Sig.AnyRef) { // need unbox
+      val unbox = MethodHandles.lookup().findVirtual(sig.getClass, "unbox", MethodType.methodType(sig.klass, Sig.AnyRef.klass))
+      MethodHandles.filterReturnValue(mh, unbox)
+    } else if(sig == Sig.AnyRef) { // need box
+      val box = MethodHandles.lookup().findVirtual(sig.getClass, "box", MethodType.methodType(Sig.AnyRef.klass, mhSig.klass))
+      MethodHandles.filterReturnValue(mh, box)
+    } else { // incompatible primitive
+      throw new IllegalArgumentException(s"Incompatible primitive: ${mhSig} and ${sig}")
     }
   }
 
-  private[this] def typeHintAggressive[A, B, C](f: (A, B) => C): ((TypeTag[_], TypeTag[_]), TypeTag[_]) = {
-    f match {
-      case f1 =>
-        val fallback = ((TypeTag.Any -> TypeTag.Any) -> TypeTag.Any)
-        val re = """^apply\$mc(.)(.)(.)\$sp$""".r
-        val declaredMethods = f1.getClass.getDeclaredMethods.map(_.getName).filter(_.matches(re.regex))
-        if (declaredMethods.size == 1) {
-          declaredMethods.head match {
-            case `re`(a, b, c) => ((typeTagFromSig(b(0)) -> typeTagFromSig(c(0))) -> typeTagFromSig(a(0)))
-          }
-        } else {
-          fallback
-        }
+  private[this] def specializedApply(ret: Sig, arg: Sig): (Sig, Sig, String) =
+    if(!Function1Meta.specializedSigsB.contains(ret) || !Function1Meta.specializedSigsA.contains(arg)) (Sig.AnyRef, Sig.AnyRef, "applly")
+    else (ret, arg, s"apply$$mc${ret.char}${arg.char}$$sp")
+
+  private[this] def typeHintAggressive[A, B](native: A => B): (Sig, Sig) = {
+    val fallback = (Sig.AnyRef -> Sig.AnyRef)
+    val re = """^apply\$mc(.)(.)\$sp$""".r
+    val declaredMethods = native.getClass.getDeclaredMethods.map(_.getName).filter(_.matches(re.regex))
+    if (declaredMethods.size == 1) {
+      declaredMethods.head match {
+        case `re`(a, b) => (Sig.of(b(0)) -> Sig.of(a(0)))
+      }
+    } else {
+        fallback
     }
   }
 
-  private[this] def typeTagFromSig(sig: Char): TypeTag[_] =
-    sig2TypeTag.get(sig).getOrElse(TypeTag.Any)
-
-  private[this] def sigFromTypeTag(tag: TypeTag[_]): Char =
-    typeTag2Sig.get(tag).getOrElse('L')
-
-  private[this] def sigFromTypeTag(tag: Option[TypeTag[_]]): Char =
-    tag.map { t => sigFromTypeTag(t) }.getOrElse('L')
-
-  private[this] def sigFromTypeTag(t1: Option[TypeTag[_]], t2: Option[TypeTag[_]]): Char = {
-    val s1 = sigFromTypeTag(t1)
-    val s2 = sigFromTypeTag(t2)
-
-    if (s1 == 'L') s2
-    else if (s2 == 'L') s1
-    else if (s1 == s2) s1
-    else throw new AssertionError(s"BUG: ${t1} is incompatible to ${t2}")
-  }
-
-  private[this] def compileComposed[A, B, C](c: FastComposable2[A, B, C], aggressive: Boolean): A => C = {
+  private[this] def compileComposed[A, B, C](c: Compose[A, B, C], aggressive: Boolean): A => C = {
     val functions = c.toSeq
     val naked = functions.map {
-      case f1: FastComposable1[_, _] => f1.unwrap
+      case f1: Native[_, _] => f1.unwrap
       case f1 => f1
     }
 
-    val klass = ClassGen.composerClass(functions.map { f =>
-      sigFromTypeTag(typeHintA(f, aggressive)) -> sigFromTypeTag(typeHintB(f, aggressive))
-    })
+    val klass = ClassGen.composerClass(functions.map(typeHint(_, aggressive)).map { case (s1, s2) => (s1.char -> s2.char) })
 
     klass.getConstructor(functions.map { _ => classOf[Function1[_, _]] }: _*)
       .newInstance(naked: _*)
       .asInstanceOf[A => C]
   }
-
-  private[this] def compileSplitJoin[A, B, C, D](f1: A => B, f2: A => C, j: (B, C) => D, aggressive: Boolean): A => D = {
-    val sig1 = sigFromTypeTag(typeHintA(f1, aggressive), typeHintA(f2, aggressive))
-    val sig21 = sigFromTypeTag(typeHintB(f1, aggressive), typeHintA(j, aggressive)._1)
-    val sig22 = sigFromTypeTag(typeHintB(f2, aggressive), typeHintA(j, aggressive)._2)
-    val sig3 = sigFromTypeTag(typeHintB(j, aggressive))
-
-    val klass = ClassGen.splitJoinClass(sig1, sig21, sig22, sig3)
-
-    klass.getConstructor(classOf[Function1[_, _]], classOf[Function1[_, _]], classOf[Function2[_, _, _]])
-      .newInstance(compile(f1), compile(f2), j)
-      .asInstanceOf[A => D]
-  }
-
 }
 

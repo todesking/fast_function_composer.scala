@@ -1,3 +1,5 @@
+package com.todesking.fast_function_composer.test
+
 import org.scalatest.{ FunSpec, Matchers }
 
 import com.todesking.fast_function_composer.FastComposable
@@ -34,27 +36,6 @@ class Spec extends FunSpec with Matchers {
       cfc(1) should be(2)
 
       FastComposable.inspect(cfc) should be("[(I => I) >>> (I => D) >>> (L => L) >>> (L => I)]")
-
-      val fs = FastComposable.splitJoin(fII, fID) { (a: Any, b: Any) => a.toString + b.toString }
-      fs(1) should be("21.0")
-      FastComposable.compile(fs)(1) should be("21.0")
-
-      val fsPrim = FastComposable.splitJoin(fII, fID) { (a: Int, b: Double) => a.toString + b.toString }
-      fsPrim(1) should be("21.0")
-      FastComposable.compile(fsPrim)(1) should be("21.0")
-    }
-
-    it("should make a function from two function1 and a combinator") {
-      import FastComposable.{ hint, noHint }
-      val f = FastComposable.splitJoin[Int, String, Double, String](hint { x: Int => (x + 1).toString }, hint { x: Int => x + 10.0 }) { (x1, x2) => x1 + x2.toString }
-
-      f(99) should be("100109.0")
-
-      val fc = FastComposable.compile(f, true)
-
-      fc(99) should be("100109.0")
-
-      FastComposable.inspect(fc) should be("[I ={L|D}=> L]")
     }
   }
 }
