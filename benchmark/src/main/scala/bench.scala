@@ -22,7 +22,11 @@ object Bench {
 
   val baseline = {
     def F(x: Int) = f8(f7(f6(f5(f4(f3(f2(f1(x))))))))
-    x: Int => F(F(F(F(x))))
+    x: Int => F(F(F(F(
+      F(F(F(
+        F(F(x))
+      )))
+    ))))
   }
 
   val standardF = {
@@ -33,20 +37,29 @@ object Bench {
   val fastF = {
     import FastComposable.{ hint, compile }
     def F = hint(f1) andThen hint(f2) andThen hint(f3) andThen hint(f4) andThen hint(f5) andThen hint(f6) andThen hint(f7) andThen hint(f8)
-    compile(F andThen F andThen F andThen F)
+    val c1 = compile(F andThen F andThen F andThen F, aggressive = false)
+    val c2 = compile(F andThen F andThen F, aggressive = false)
+    val c3 = compile(F andThen F, aggressive = false);
+    { i: Int => c1(c2(c3(i))) }
   }
 
   val aggressiveF = {
     // Experimental: Same performance as fast, but no type hints required
     import FastComposable.{ hint, compile }
     def F = hint(f1) andThen f2 andThen f3 andThen f4 andThen f5 andThen f6 andThen f7 andThen f8
-    compile(F andThen F andThen F andThen F, aggressive = true)
+    val c1 = compile(F andThen F andThen F andThen F, aggressive = true)
+    val c2 = compile(F andThen F andThen F, aggressive = true)
+    val c3 = compile(F andThen F, aggressive = true);
+    { i: Int => c1(c2(c3(i))) }
   }
 
   val fastMHF = {
     import FastComposable.{ hint, compileMH }
     def F = hint(f1) andThen hint(f2) andThen hint(f3) andThen hint(f4) andThen hint(f5) andThen hint(f6) andThen hint(f7) andThen hint(f8)
-    compileMH(F andThen F andThen F andThen F)
+    val c1 = compileMH(F andThen F andThen F andThen F)
+    val c2 = compileMH(F andThen F andThen F)
+    val c3 = compileMH(F andThen F);
+    { i: Int => c1(c2(c3(i))) }
   }
 }
 
