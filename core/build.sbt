@@ -68,18 +68,18 @@ ${sigs.map { case (ty, ch, kl) =>
   IO.write(mhf1, s"""
 package com.todesking.fast_function_composer
 import java.lang.invoke.MethodHandle
-sealed abstract class MethodHandleFunction1[A, B] extends Function1[A, B]
+sealed abstract class MethodHandleFunction1[A, B](src: FastComposable[A, B]) extends Compiled[A, B](src)
 object MethodHandleFunction1 {
 ${f1Asigs.flatMap { case (ty1, ch1, _) => f1Bsigs.map { case (ty2, ch2, _) =>
     s"""
-class ${ch1}${ch2}(mh: MethodHandle) extends MethodHandleFunction1[${ty1}, ${ty2}] {
+class ${ch1}${ch2}(mh: MethodHandle, src: FastComposable[${ty1}, ${ty2}]) extends MethodHandleFunction1[${ty1}, ${ty2}](src) {
   override def apply(v: ${ty1}): ${ty2} = mh.invokeExact(v)
 }"""
   }
 }.mkString("\n")}
-  def apply[A, B](mh: MethodHandle, sigA: Sig, sigB: Sig): MethodHandleFunction1[A, B] = (sigA.char, sigB.char) match {
-${f1Asigs.flatMap { case (_, ch1, _) => f1Bsigs.map { case (_, ch2, _) =>
-s"""    case ('${ch1}', '${ch2}') => new ${ch1}${ch2}(mh).asInstanceOf[MethodHandleFunction1[A, B]]"""
+  def apply[A, B](mh: MethodHandle, sigA: Sig, sigB: Sig, src: FastComposable[A, B]): MethodHandleFunction1[A, B] = (sigA.char, sigB.char) match {
+${f1Asigs.flatMap { case (ty1, ch1, _) => f1Bsigs.map { case (ty2, ch2, _) =>
+s"""    case ('${ch1}', '${ch2}') => new ${ch1}${ch2}(mh, src.asInstanceOf[FastComposable[${ty1}, ${ty2}]]).asInstanceOf[MethodHandleFunction1[A, B]]"""
 }}.mkString("\n")}
     case (a, b) => throw new IllegalArgumentException(s"Unsupported MethodHandle type: $${a} => $${b}")
   }

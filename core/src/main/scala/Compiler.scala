@@ -30,11 +30,11 @@ object Compiler {
 
   def compileMH[A, B](f: A => B): A => B = f match {
     case f1: Native[A, B] => f1.unwrap
-    case c @ Compose(_, _) => compileMH(c.toSeq)
+    case c @ Compose(_, _) => compileMH(c.toSeq, c, aggressive = true)
     case f1 => f1
   }
 
-  def compileMH[A, B](fs: Seq[Native[_, _]], aggressive: Boolean = true): A => B = {
+  def compileMH[A, B](fs: Seq[Native[_, _]], src: FastComposable[A, B], aggressive: Boolean): A => B = {
     val lookup = MethodHandles.lookup()
     if (fs.isEmpty) {
       (identity _).asInstanceOf[A => B]
@@ -54,7 +54,7 @@ object Compiler {
         }
       val sigLast = Sig.of(methodHandle.`type`.returnType)
 
-      MethodHandleFunction1(methodHandle, sigFirst, sigLast).asInstanceOf[A => B]
+      MethodHandleFunction1(methodHandle, sigFirst, sigLast, src)
     }
   }
 
@@ -98,8 +98,8 @@ object Compiler {
 
     val klass = ClassGen.composerClass(functions.map(typeHint(_, aggressive)).map { case (s1, s2) => (s1.char -> s2.char) })
 
-    klass.getConstructor(functions.map { _ => classOf[Function1[_, _]] }: _*)
-      .newInstance(naked: _*)
+    klass.getConstructor(classOf[FastComposable[_, _]] +: functions.map { _ => classOf[Function1[_, _]] }: _*)
+      .newInstance((c +: naked): _*)
       .asInstanceOf[A => C]
   }
 }

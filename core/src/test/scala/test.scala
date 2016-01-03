@@ -29,13 +29,13 @@ class Spec extends FunSpec with Matchers {
 
       val fc = fII andThen fID andThen fAnyString andThen fStringI
 
-      FastComposable.inspect(fc) should be("(Int => Int) >>> (Int => Double) >>> (Any => java.lang.String) >>> (String => Int)")
+      FastComposable.inspect(fc) should be("(I => I) >>> (I => D) >>> (L => L) >>> (L => I)")
 
       fc(1) should be(2)
       val cfc = FastComposable.compile(fc, false)
       cfc(1) should be(2)
 
-      FastComposable.inspect(cfc) should be("[(I => I) >>> (I => D) >>> (L => L) >>> (L => I)]")
+      FastComposable.inspect(cfc) should be("Compiled[(I => I) >>> (I => D) >>> (L => L) >>> (L => I)]")
     }
   }
 }

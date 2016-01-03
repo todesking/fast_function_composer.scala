@@ -13,6 +13,7 @@ object ClassGen {
   private[this] lazy val ctObject = classPool.get("java.lang.Object")
   private[this] lazy val ctString = classPool.get("java.lang.String")
   private[this] lazy val ctCompiled = classPool.get(getClass.getPackage.getName + ".Compiled")
+  private[this] lazy val ctFastComposable = classPool.get(getClass.getPackage.getName + ".FastComposable")
   private[this] lazy val ctPrimitiveClasses: Map[Char, CtClass] = {
     import CtClass._
     Seq(booleanType, charType, byteType, shortType, intType, longType, floatType, doubleType).map { c =>
@@ -152,9 +153,9 @@ object ClassGen {
       klass.addField(field)
     }
 
-    val co = new CtConstructor(fields.map(_._2).toArray, klass)
-    co.setBody("{ "
-      + fields.map(_._1).zipWithIndex.map { case (fname, i) => s"this.${fname} = $$${i + 1};" }.mkString("\n")
+    val co = new CtConstructor((ctFastComposable +: fields.map(_._2)).toArray, klass)
+    co.setBody("{ super($1);"
+      + fields.map(_._1).zipWithIndex.map { case (fname, i) => s"this.${fname} = $$${i + 1 + 1};" }.mkString("\n")
       + "}")
     klass.addConstructor(co)
 

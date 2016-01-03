@@ -6,9 +6,9 @@ import scala.language.existentials
 
 sealed abstract class FastComposable[A, B] extends Function1[A, B] {
   override def compose[C](f: C => A): C => B =
-    FastComposable.Compose(this, FastComposable.noHint(f))
-  override def andThen[C](f: B => C): A => C =
     FastComposable.Compose(FastComposable.noHint(f), this)
+  override def andThen[C](f: B => C): A => C =
+    FastComposable.Compose(this, FastComposable.noHint(f))
 }
 
 object FastComposable {
@@ -32,6 +32,7 @@ object FastComposable {
   def inspect[A, B](f: A => B): String = f match {
     case NativeHint(_, sigA, sigB) => s"(${sigA.char} => ${sigB.char})"
     case Compose(f1, f2) => s"${inspect(f1)} >>> ${inspect(f2)}"
+    case c: Compiled[A, B] => s"Compiled[${inspect(c.src)}]"
     case f1 => "(native)"
   }
 
@@ -47,11 +48,11 @@ object FastComposable {
     override def apply(a: A): B = unwrap(a)
   }
 
-  case class Compose[A, B, C](f1: FastComposable[B, C], f2: FastComposable[A, B]) extends FastComposable[A, C] {
-    override def apply(a: A): C = f1(f2(a))
+  case class Compose[A, B, C](f1: FastComposable[A, B], f2: FastComposable[B, C]) extends FastComposable[A, C] {
+    override def apply(a: A): C = f2(f1(a))
 
     def toSeq: Seq[Native[_, _]] =
-      toSeq(f2) ++ toSeq(f1)
+      toSeq(f1) ++ toSeq(f2)
 
     private[this] def toSeq(f: FastComposable[_, _]): Seq[Native[_, _]] = f match {
       case c @ Compose(_, _) => c.toSeq
