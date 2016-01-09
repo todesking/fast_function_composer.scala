@@ -6,7 +6,7 @@ import java.lang.invoke.{ MethodHandles, MethodHandle, MethodType }
 import scala.language.existentials
 
 object Compiler {
-  import FastComposable.{Native, NativeHint,NativeNoHint, Compose}
+  import FastComposable.{ Native, NativeHint, NativeNoHint, Compose }
 
   def typeHintA[A, B](f: A => B, aggressive: Boolean): Sig =
     typeHint(f, aggressive)._1
@@ -60,11 +60,11 @@ object Compiler {
 
   private[this] def autoBox(mh: MethodHandle, sig: Sig): MethodHandle = {
     val mhSig = Sig.of(mh.`type`.returnType)
-    if(mhSig == sig) mh
-    else if(mhSig == Sig.AnyRef) { // need unbox
+    if (mhSig == sig) mh
+    else if (mhSig == Sig.AnyRef) { // need unbox
       val unbox = MethodHandles.lookup().findVirtual(sig.getClass, "unbox", MethodType.methodType(sig.klass, Sig.AnyRef.klass))
       MethodHandles.filterReturnValue(mh, unbox)
-    } else if(sig == Sig.AnyRef) { // need box
+    } else if (sig == Sig.AnyRef) { // need box
       val box = MethodHandles.lookup().findVirtual(sig.getClass, "box", MethodType.methodType(Sig.AnyRef.klass, mhSig.klass))
       MethodHandles.filterReturnValue(mh, box)
     } else { // incompatible primitive
@@ -73,7 +73,7 @@ object Compiler {
   }
 
   private[this] def specializedApply(ret: Sig, arg: Sig): (Sig, Sig, String) =
-    if(!Function1Meta.specializedSigsB.contains(ret) || !Function1Meta.specializedSigsA.contains(arg)) (Sig.AnyRef, Sig.AnyRef, "applly")
+    if (!Function1Meta.specializedSigsB.contains(ret) || !Function1Meta.specializedSigsA.contains(arg)) (Sig.AnyRef, Sig.AnyRef, "applly")
     else (ret, arg, s"apply$$mc${ret.char}${arg.char}$$sp")
 
   private[this] def typeHintAggressive[A, B](native: A => B): (Sig, Sig) = {
@@ -85,7 +85,7 @@ object Compiler {
         case `re`(a, b) => (Sig.of(b(0)) -> Sig.of(a(0)))
       }
     } else {
-        fallback
+      fallback
     }
   }
 

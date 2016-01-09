@@ -87,3 +87,5 @@ s"""    case ('${ch1}', '${ch2}') => new ${ch1}${ch2}(mh, src.asInstanceOf[FastC
 """)
   Seq(function1Meta, sig, mhf1)
 }
+
+scalariformSettings
