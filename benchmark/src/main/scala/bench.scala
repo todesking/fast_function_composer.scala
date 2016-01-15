@@ -1,5 +1,6 @@
-package com.todesking.fast_function_composer
-import scala.reflect.runtime.universe.TypeTag
+package com.todesking.fast_function_composer.benchmark
+
+import com.todesking.fast_function_composer.FastComposable
 
 import org.openjdk.jmh.annotations.{ Benchmark, State }
 

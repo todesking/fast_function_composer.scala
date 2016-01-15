@@ -12,7 +12,7 @@ libraryDependencies += "org.javassist" % "javassist" % "3.20.0-GA"
 
 libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value
 
-libraryDependencies += "org.scalatest" % "scalatest_2.11" % "2.2.4" % "test"
+libraryDependencies += "org.scalatest" %% "scalatest" % "2.2.6" % "test"
 
 scalacOptions ++= Seq("-feature", "-deprecation")
 
