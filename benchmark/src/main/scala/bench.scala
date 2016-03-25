@@ -23,11 +23,7 @@ object Bench {
 
   val baseline = {
     def F(x: Int) = f8(f7(f6(f5(f4(f3(f2(f1(x))))))))
-    x: Int => F(F(F(F(F(F(
-      F(F(F(F(F(
-        F(F(F(F(x))))
-      )))))
-    ))))))
+    x: Int => F(F(F(F(x))))
   }
 
   val standardF = {
